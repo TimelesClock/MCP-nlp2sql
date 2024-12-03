@@ -195,38 +195,35 @@ Respond in this JSON format:
                     )
                 ]
             )
-
         @self.server.list_tools()
         async def handle_list_tools() -> list[types.Tool]:
             """Handle tools/list request"""
             return [
-                types.Tool(
-                    name="query_database",
-                    description="Execute a read-only SQL query against the MySQL database",
-                    arguments=[
-                        types.ToolArgument(
-                            name="query",
-                            description="The SQL SELECT query to execute",
-                            required=True
-                        )
-                    ]
-                ),
-                types.Tool(
-                    name="list_tables",
-                    description="List all available tables in the database",
-                    arguments=[]
-                ),
-                types.Tool(
-                    name="describe_table",
-                    description="Get the structure of a specific table",
-                    arguments=[
-                        types.ToolArgument(
-                            name="table_name",
-                            description="Name of the table to describe",
-                            required=True
-                        )
-                    ]
-                )
+                {
+                    "name": "query_database",
+                    "description": "Execute a read-only SQL query against the MySQL database",
+                    "arguments": {
+                        "query": {
+                            "description": "The SQL SELECT query to execute",
+                            "required": True
+                        }
+                    }
+                },
+                {
+                    "name": "list_tables",
+                    "description": "List all available tables in the database",
+                    "arguments": {}
+                },
+                {
+                    "name": "describe_table",
+                    "description": "Get the structure of a specific table",
+                    "arguments": {
+                        "table_name": {
+                            "description": "Name of the table to describe",
+                            "required": True
+                        }
+                    }
+                }
             ]
 
         @self.server.call_tool()

@@ -3,7 +3,7 @@ import asyncio
 from typing import Optional, Dict, Any, List, Tuple
 import anthropic
 from app.config import settings
-from app.models.query import ModelPreferences, SchemaAnalysis
+from app.models.query import ModelPreferences
 from app.core.mcp.session import MCPSession
 from app.core.exceptions import SamplingError
 from app.utils.logging import logger
@@ -15,43 +15,91 @@ class SamplingService:
             api_key=settings.ANTHROPIC_API_KEY
         )
 
-    async def generate_sql(
+    async def generate_sql_and_viz(
         self,
         session: MCPSession,
         question: str,
         schema: Dict[str, Any],
         model_preferences: Optional[ModelPreferences] = None
-    ) -> Tuple[str, str, List[Dict[str, str]]]:
-        """Generate SQL using Claude API"""
+    ) -> Tuple[str, str, List[Dict[str, str]], Dict[str, Any]]:
+        """Generate SQL and Metabase question settings using Claude API"""
         try:
-            system_prompt = f"""You are an expert in converting natural language questions into MySQL queries.
+            system_prompt = f"""You are an expert in converting natural language questions into SQL queries and Metabase visualizations.
 
 Database schema:
 {json.dumps(schema, indent=2)}
 
-Generate a MySQL query to answer this question. Return ONLY valid JSON in this format:
+Generate a MySQL query and Metabase question settings to answer this question.
+Consider the type of data and what visualization would best represent it.
+
+Return ONLY valid JSON in this format:
 {{
-    "sql": "your SQL query here",
+    "sql": "your SQL query here using escape characters when needed",
     "explanation": "detailed explanation of what the query does",
     "thought_process": [
         {{"step": "Understanding the request", "thought": "explanation"}},
         {{"step": "Analyzing schema", "thought": "explanation"}},
-        {{"step": "Formulating query", "thought": "explanation"}}
-    ]
+        {{"step": "Choosing visualization", "thought": "explanation"}}
+    ],
+    "metabase_question": {{
+        "name": "clear name for the question",
+        "description": "detailed description",
+        "type": "question",
+        "dataset": false,
+        "dataset_query": {{
+            "type": "native",
+            "native": {{
+                "query": "your SQL query here with newlines and indentation and spaces using escape characters and explanation using comments",
+                "template-tags": {{}}
+            }},
+            "database": 270009
+        }},
+        "display": "type of visualization",
+        "displayIsLocked":true,
+        "visualization_settings": {{
+            "graph.dimensions": ["columns for x-axis"],
+            "graph.metrics": ["columns for y-axis"],
+            "graph.show_values": true,
+            "stackable.stack_type": "stacked/normalized/null",
+        }},
+        "parameters": [],
+        "parameter_mappings": [],
+        "result_metadata": [
+            {{
+                "name": "column name",
+                "display_name": "display name",
+                "base_type": "type/Text or type/Integer or type/Float or type/DateTime",
+                "semantic_type": null,
+                "field_ref": ["field", "column_name", {{"base-type": "type/Text"}}]
+            }}
+        ]
+    }}
 }}
 
 Important:
-1. Only use SELECT queries
-2. Handle NULL values appropriately
-3. Use proper table/column prefixes to avoid ambiguity
-4. Include proper JOIN conditions
-5. Add appropriate WHERE clauses
-6. Format dates correctly using MySQL date functions"""
+1. Choose appropriate visualization type:
+   - Time series → line, area, bar(combo)
+   - Comparisons → bar, pie
+   - Distributions → scatter
+   - Geographic → map
+   The available visualization types are: line, bar, combo, area, row, waterfall, scatter, pie, funnel, trend, progress, gauge, number, table, pivot table, map
+2. Include all necessary column metadata
+3. Use proper data types
+4. Set meaningful display names
+5. Ensure that when the user requests for grouped and time series, the x or y axis dimension might need multiple series breakouts
+6. Ensure that when using stacked visualizations, the dimensions are set correctly
+7. Stacked bar charts are preferred over multi line charts for daily/weekly aggregates
+8. Try to sort the data in a meaningful way
+9. Ensure that the new lines and indentations are using escape characters (\\n, \\t)
+10. Ensure that strings are not using python's triple quotes (\"\"\")
+"""
 
+            logger.debug(f"Sending generation request to Claude")
+            
             response = await asyncio.to_thread(
                 lambda: self.claude.messages.create(
                     model=settings.ANTHROPIC_MODEL,
-                    max_tokens=2000,
+                    max_tokens=4096,
                     temperature=0,
                     system=system_prompt,
                     messages=[{"role": "user", "content": question}]
@@ -61,15 +109,56 @@ Important:
             logger.debug(f"Claude response: {response.content}")
             result = self._parse_claude_response(response.content[0].text)
             
+            # Extract required components
+            sql_query = result["sql"]
+            explanation = result["explanation"]
+            thought_process = result["thought_process"]
+            metabase_question = result["metabase_question"]
+            
+            # Ensure required fields exist
+            self._validate_metabase_question(metabase_question)
+            
             return (
-                result["sql"],
-                result["explanation"],
-                result["thought_process"]
+                sql_query,
+                explanation,
+                thought_process,
+                metabase_question
             )
             
         except Exception as e:
-            logger.error(f"Error generating SQL: {str(e)}", exc_info=True)
-            raise SamplingError(f"Failed to generate SQL: {str(e)}")
+            logger.error(f"Error generating SQL and visualization: {str(e)}", exc_info=True)
+            raise SamplingError(f"Failed to generate SQL and visualization: {str(e)}")
+
+    def _validate_metabase_question(self, question: Dict[str, Any]) -> None:
+        """Validate Metabase question format"""
+        required_fields = {
+            "name": str,
+            "type": str,
+            "dataset_query": dict,
+            "display": str,
+            "visualization_settings": dict,
+            "parameters": list,
+            "parameter_mappings": list
+        }
+        
+        for field, field_type in required_fields.items():
+            if field not in question:
+                raise SamplingError(f"Missing required field: {field}")
+            if not isinstance(question[field], field_type):
+                raise SamplingError(f"Invalid type for field {field}")
+                
+        # Validate dataset_query structure
+        query = question["dataset_query"]
+        if "type" not in query or query["type"] != "native":
+            raise SamplingError("Invalid dataset_query type")
+            
+        if "native" not in query or "query" not in query["native"]:
+            raise SamplingError("Invalid native query structure")
+            
+        # Validate display type
+        valid_displays = ["line", "bar", "pie", "scatter", "area", "table", "map"]
+        if question["display"] not in valid_displays:
+            raise SamplingError(f"Invalid display type: {question['display']}")
 
     async def refine_sql(
         self,
@@ -79,8 +168,7 @@ Important:
         schema: Dict[str, Any]
     ) -> Tuple[str, str, List[Dict[str, str]]]:
         """Refine SQL query based on error message"""
-        try:
-            system_prompt = f"""You are an expert in SQL query debugging and optimization.
+        system_prompt = f"""You are an expert in SQL query debugging.
 
 Original SQL query that failed:
 {original_sql}
@@ -91,25 +179,17 @@ Error message:
 Database schema:
 {json.dumps(schema, indent=2)}
 
-Fix the SQL query to resolve the error. Return ONLY valid JSON in this format:
+Fix the SQL query. Return ONLY valid JSON in this format:
 {{
     "sql": "fixed SQL query",
-    "explanation": "detailed explanation of fixes made",
+    "explanation": "explanation of fixes",
     "thought_process": [
-        {{"step": "Error Analysis", "thought": "explanation of what caused the error"}},
-        {{"step": "Query Review", "thought": "analysis of the original query"}},
-        {{"step": "Fix Implementation", "thought": "explanation of how the error was fixed"}}
+        {{"step": "Error Analysis", "thought": "what caused the error"}},
+        {{"step": "Fix Implementation", "thought": "how the error was fixed"}}
     ]
-}}
+}}"""
 
-Important fixes to consider:
-1. Add table aliases to resolve ambiguous column references
-2. Verify all column names exist in their respective tables
-3. Ensure proper JOIN conditions
-4. Use correct MySQL date/time functions
-5. Handle NULL values appropriately
-6. Keep the original query's intent and functionality"""
-
+        try:
             logger.info(f"Sending refinement request to Claude for error: {error_msg}")
             
             response = await asyncio.to_thread(
@@ -128,10 +208,6 @@ Important fixes to consider:
             logger.debug(f"Claude refinement response: {response.content}")
             result = self._parse_claude_response(response.content[0].text)
             
-            # Validate the refined SQL has basic requirements
-            if not result["sql"].strip().lower().startswith("select"):
-                raise SamplingError("Refined query must be a SELECT statement")
-            
             return (
                 result["sql"],
                 result["explanation"],
@@ -147,21 +223,17 @@ Important fixes to consider:
     def _parse_claude_response(self, response_text: str) -> Dict[str, Any]:
         """Parse and validate Claude's response"""
         try:
-            # Clean response text
             response_text = response_text.strip()
             json_match = re.search(r'({[\s\S]*})', response_text)
             
             if not json_match:
                 raise SamplingError("No JSON found in response")
             
-            # Clean the matched JSON text
             cleaned_text = json_match.group(1)
             cleaned_text = ''.join(
                 char for char in cleaned_text 
                 if ord(char) >= 32 and ord(char) < 127
             )
-            
-            logger.debug(f"Cleaned response text: {cleaned_text}")
             
             try:
                 result = json.loads(cleaned_text)
@@ -169,12 +241,6 @@ Important fixes to consider:
                 logger.error(f"JSON decode error: {str(e)}")
                 logger.error(f"Attempted to parse: {cleaned_text}")
                 raise SamplingError(f"Failed to parse Claude response as JSON: {str(e)}")
-
-            # Validate required fields
-            required_fields = ["sql", "explanation", "thought_process"]
-            missing_fields = [field for field in required_fields if field not in result]
-            if missing_fields:
-                raise SamplingError(f"Missing required fields in response: {', '.join(missing_fields)}")
 
             return result
             

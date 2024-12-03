@@ -13,14 +13,17 @@ async def process_natural_language_query(
 ):
     """Process a natural language query and return SQL results"""
     try:
-        return await query_service.process_query(
+        a = await query_service.process_query(
             query.question,
             query.model_preferences
         )
+        print(a)
+        return a
     except Exception as e:
         logger.exception("Failed to process query",e)
         raise HTTPException(status_code=400, detail=str(e))
 
+# TOFIX
 @router.get("/capabilities")
 async def get_capabilities(
     query_service: QueryService = Depends(get_query_service)
