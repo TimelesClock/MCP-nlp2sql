@@ -78,7 +78,7 @@ Return ONLY valid JSON in this format:
 
 Important:
 1. Choose appropriate visualization type:
-   - Time series → line, area, bar(combo)
+   - Time series → line, area, bar
    - Comparisons → bar, pie
    - Distributions → scatter
    - Geographic → map
@@ -86,12 +86,13 @@ Important:
 2. Include all necessary column metadata
 3. Use proper data types
 4. Set meaningful display names
-5. Ensure that when the user requests for grouped and time series, the x or y axis dimension might need multiple series breakouts
-6. Ensure that when using stacked visualizations, the dimensions are set correctly
-7. Stacked bar charts are preferred over multi line charts for daily/weekly aggregates
-8. Try to sort the data in a meaningful way
-9. Ensure that the new lines and indentations are using escape characters (\\n, \\t)
-10. Ensure that strings are not using python's triple quotes (\"\"\")
+5. Ensure that it is in valid JSON format
+6. Ensure that when the user requests for grouped and time series, the x or y axis dimension might need multiple series breakouts
+7. Ensure that when using stacked visualizations, the dimensions are set correctly
+8. Stacked bar charts are preferred over multi line charts for daily/weekly aggregates
+9. Try to sort the data in a meaningful way
+10. Ensure that the new lines and indentations are using escape characters (\\n, \\t)
+11. Ensure that strings are not using python's triple quotes (\"\"\")
 """
 
             logger.debug(f"Sending generation request to Claude")

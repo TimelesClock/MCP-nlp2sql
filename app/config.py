@@ -11,12 +11,9 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: List[str] = ["*"]
     
-    # MCP Settings
-    MCP_SERVER_PATH: str = "./mysql_mcp_server.py"
-    
     # Anthropic Settings
     ANTHROPIC_API_KEY: str
-    ANTHROPIC_MODEL: str = "claude-3-sonnet-20240229"
+    ANTHROPIC_MODEL: str = "claude-3-sonnet-20241022"
     
     class Config:
         env_file = ".env"

@@ -172,33 +172,3 @@ class QueryService:
         except Exception as e:
             logger.error(f"Error in get_capabilities: {str(e)}", exc_info=True)
             raise MCPError(f"Failed to get capabilities: {str(e)}")
-
-    async def preview_visualization(
-        self,
-        question: str,
-        sql: str,
-        viz_settings: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Preview how a visualization would look with sample data"""
-        
-        async def preview(session):
-            try:
-                # Execute query with limit to get sample data
-                sample_sql = f"{sql} LIMIT 100"
-                result, _ = await self._execute_query(session, sample_sql, retry=False)
-                
-                # Create preview information
-                return {
-                    "sample_data": result,
-                    "visualization": {
-                        "type": viz_settings.get("display", "table"),
-                        "settings": viz_settings.get("visualization_settings", {}),
-                        "columns": result.get("columns", []),
-                        "row_count": len(result.get("rows", [])),
-                    }
-                }
-            except Exception as e:
-                logger.error(f"Error generating preview: {str(e)}", exc_info=True)
-                raise QueryError(f"Failed to generate preview: {str(e)}")
-                
-        return await self.mcp_client.with_session(preview)

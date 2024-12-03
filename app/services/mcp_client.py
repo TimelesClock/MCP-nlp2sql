@@ -7,13 +7,18 @@ from app.core.mcp.session import MCPSession
 from app.core.exceptions import MCPError
 import shlex
 
+
 class MCPClient:
     def __init__(self):
-        # Split the command into parts to handle spaces correctly
-        cmd_parts = shlex.split(settings.MCP_SERVER_PATH)
+        # Set up the uv command to run the mysql-mcp server
         self.server_params = StdioServerParameters(
-            command=cmd_parts[0],  # Python executable
-            args=cmd_parts[1:],    # Script path and any additional args
+            command="uv",
+            args=[
+                "--directory",
+                "/Users/leong/Documents/nlp2sql-api/mysql-mcp",
+                "run",
+                "mysql-mcp"
+            ],
             env=None
         )
         
