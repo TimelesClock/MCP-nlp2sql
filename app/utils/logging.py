@@ -27,7 +27,7 @@ def log_execution_time(func):
         except Exception as e:
             execution_time = time.time() - start_time
             logger.error(
-                f"Function {func.__name__} failed after {execution_time:.2f} seconds: {str(e)}"
+                f"Function {func.__name__} failed after {execution_time:.2f} seconds:  "
             )
             raise
     return wrapper
@@ -45,7 +45,7 @@ def log_mcp_request(method: str, params: Optional[dict] = None):
                 logger.info(f"MCP Request successful - Method: {method}")
                 return result
             except Exception as e:
-                logger.error(f"MCP Request failed - Method: {method} - Error: {str(e)}")
+                logger.error(f"MCP Request failed - Method: {method} - Error:  ")
                 raise
         return wrapper
     return decorator

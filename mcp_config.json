@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mysql": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "./mysql-mcp",
+        "run",
+        "mysql-mcp"
+      ]
+    }
+  }
+}

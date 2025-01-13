@@ -6,7 +6,7 @@ class MCPTransport(Transport):
     """Custom MCP transport implementation with enhanced logging and error handling"""
     
     def __init__(self):
-        self.onmessage: Optional[Callable[[JSONRPCMessage], None]] = None
+        self.onmessage: Optional[Callable[[JSONRPCMessage], None]] = None # type: ignore
         self.onerror: Optional[Callable[[Exception], None]] = None
         self.onclose: Optional[Callable[[], None]] = None
         self._is_closed = False
@@ -18,7 +18,7 @@ class MCPTransport(Transport):
             # Implementation specific to your transport needs
             pass
         except Exception as e:
-            logger.error(f"Failed to start transport: {str(e)}")
+            logger.error(f"Failed to start transport:")
             if self.onerror:
                 self.onerror(e)
             raise
@@ -33,7 +33,7 @@ class MCPTransport(Transport):
             # Implementation specific to your transport needs
             pass
         except Exception as e:
-            logger.error(f"Failed to send message: {str(e)}")
+            logger.error(f"Failed to send message:")
             if self.onerror:
                 self.onerror(e)
             raise
@@ -47,7 +47,7 @@ class MCPTransport(Transport):
                 if self.onclose:
                     self.onclose()
             except Exception as e:
-                logger.error(f"Error closing transport: {str(e)}")
+                logger.error(f"Error closing transport:")
                 if self.onerror:
                     self.onerror(e)
                 raise
@@ -58,7 +58,7 @@ class MCPTransport(Transport):
             if self.onmessage:
                 self.onmessage(JSONRPCMessage(**raw_message))
         except Exception as e:
-            logger.error(f"Error handling message: {str(e)}")
+            logger.error(f"Error handling message:")
             if self.onerror:
                 self.onerror(e)
 

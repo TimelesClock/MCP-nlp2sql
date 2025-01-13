@@ -1,5 +1,7 @@
 import asyncio
+import os
 from typing import List, Dict, Any
+import json
 
 import aiomysql
 from pydantic import BaseModel, AnyUrl
@@ -31,16 +33,63 @@ async def initialize_pool():
     if not pool:
         try:
             pool = await aiomysql.create_pool(
-                host="172.18.80.1",
-                port=3306,
-                user="root",
-                password="ZCh2kMRi_ALCBwRY",
-                db="t3-test",
+                host=os.getenv("DB_HOST"),
+                port=int(os.getenv("DB_PORT")),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+                db=os.getenv("DB_NAME"),
                 autocommit=True,
                 pool_recycle=3600
             )
+            
         except Exception as e:
-            raise Exception(f"Failed to initialize MySQL pool: {str(e)}")
+            raise Exception(f"Failed to initialize MySQL pool:  ")
+
+async def execute_query(query: str) -> QueryResult:
+    """Execute a read-only SQL query"""
+    if not pool:
+        await initialize_pool()
+
+    # Basic SQL injection prevention
+    if any(keyword.lower() in query.lower() 
+           for keyword in ["insert", "update", "delete", "drop", "alter", "create"]):
+        raise ValueError("Only SELECT queries are allowed")
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute(query)
+            rows = await cursor.fetchall()
+            columns = [column[0] for column in cursor.description]
+            return QueryResult(
+                columns=columns,
+                rows=[list(row) for row in rows],
+                affected_rows=cursor.rowcount
+            )
+
+async def list_tables() -> list[str]:
+    """List all tables in the database"""
+    if not pool:
+        await initialize_pool()
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute("SHOW TABLES")
+            return [row[0] for row in await cursor.fetchall()]
+
+async def describe_table(table_name: str) -> list[dict]:
+    """Get the structure of a specific table"""
+    if not pool:
+        await initialize_pool()
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute(f"DESCRIBE {table_name}")
+            columns = ["Field", "Type", "Null", "Key", "Default", "Extra"]
+            rows = await cursor.fetchall()
+            return [
+                dict(zip(columns, row))
+                for row in rows
+            ]
 
 @server.list_resources()
 async def handle_list_resources() -> list[types.Resource]:
@@ -113,7 +162,7 @@ async def handle_read_resource(uri: AnyUrl) -> list[types.TextContent]:
             
             return [types.TextContent(
                 type="text",
-                text=str(response_data)
+                text=json.dumps(response_data, indent=2, default=str)
             )]
 
 @server.list_prompts()
@@ -217,6 +266,15 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="list_tables",
+            description="List all available tables in the database",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        types.Tool(
             name="describe_table",
             description="Get the structure of a specific table",
             inputSchema={
@@ -244,49 +302,32 @@ async def handle_call_tool(
     if not pool:
         await initialize_pool()
 
-    if not arguments:
-        raise ValueError("Missing arguments")
-
     if name == "query_database":
-        query = arguments.get("query")
-        if not query:
+        if not arguments or "query" not in arguments:
             raise ValueError("Missing query argument")
+        
+        result = await execute_query(arguments["query"])
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result.dict(), indent=2, default=str)
+        )]
 
-        # Basic SQL injection prevention
-        if any(keyword.lower() in query.lower() 
-               for keyword in ["insert", "update", "delete", "drop", "alter", "create"]):
-            raise ValueError("Only SELECT queries are allowed")
-
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute(query)
-                rows = await cursor.fetchall()
-                columns = [column[0] for column in cursor.description]
-                result = QueryResult(
-                    columns=columns,
-                    rows=[list(row) for row in rows],
-                    affected_rows=cursor.rowcount
-                )
-                return [types.TextContent(
-                    type="text",
-                    text=str(result.dict())
-                )]
+    elif name == "list_tables":
+        tables = await list_tables()
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(tables, indent=2)
+        )]
 
     elif name == "describe_table":
-        table_name = arguments.get("table_name")
-        if not table_name:
+        if not arguments or "table_name" not in arguments:
             raise ValueError("Missing table_name argument")
-
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute(f"DESCRIBE {table_name}")
-                columns = ["Field", "Type", "Null", "Key", "Default", "Extra"]
-                rows = await cursor.fetchall()
-                structure = [dict(zip(columns, row)) for row in rows]
-                return [types.TextContent(
-                    type="text",
-                    text=str(structure)
-                )]
+            
+        structure = await describe_table(arguments["table_name"])
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(structure, indent=2)
+        )]
 
     raise ValueError(f"Unknown tool: {name}")
 

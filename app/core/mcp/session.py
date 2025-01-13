@@ -17,7 +17,7 @@ class MCPSession:
                 await self.session.initialize()
                 self.initialized = True
             except Exception as e:
-                raise MCPError(f"Failed to initialize MCP session: {str(e)}")
+                raise MCPError(f"Failed to initialize MCP session:  ")
 
     async def list_resources(self) -> List[types.Resource]:
         """List available resources"""

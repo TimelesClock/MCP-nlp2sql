@@ -1,16 +1,20 @@
+# schema_service.py
+
 import json
 from typing import Dict, Any, List, Set
-from app.core.mcp.session import MCPSession
+import mcp.types as types
 from app.core.exceptions import SchemaError
 from app.utils.logging import logger
-import mcp.types as types
+from .mcp_client import BaseMCPClient
+
 
 class SchemaService:
-    def __init__(self):
+    def __init__(self, client: BaseMCPClient):
+        self.client = client
         self.schema_cache: Dict[str, Any] = {}
         self.column_cache: Dict[str, Set[str]] = {}
 
-    async def get_schema(self, session: MCPSession) -> Dict[str, Any]:
+    async def get_schema(self, session) -> Dict[str, Any]:
         """Get database schema using resources or tools"""
         if self.schema_cache:
             return self.schema_cache
@@ -30,7 +34,7 @@ class SchemaService:
             return schema
             
         except Exception as e:
-            logger.error(f"Failed to fetch schema: {str(e)}", exc_info=True)
+            logger.error(f"Failed to fetch schema: {str(e)}")
             raise SchemaError(f"Failed to fetch schema: {str(e)}")
 
     def validate_column_name(self, column: str) -> bool:
@@ -55,7 +59,7 @@ class SchemaService:
                 col["Field"] for col in table_data
             }
 
-    async def _get_schema_from_tools(self, session: MCPSession) -> Dict[str, Any]:
+    async def _get_schema_from_tools(self, session) -> Dict[str, Any]:
         """Get schema using tools"""
         schema = {}
         
@@ -63,6 +67,7 @@ class SchemaService:
         tables_result = await session.call_tool("list_tables", {})
         if not tables_result.content:
             raise SchemaError("Failed to get tables list")
+        logger.info(f"Tables result: {tables_result.content}")
             
         tables_text = next(
             (content.text for content in tables_result.content 
@@ -107,7 +112,7 @@ class SchemaService:
             "relationships": self._infer_relationships(schema)
         }
 
-    async def _get_schema_from_resources(self, session: MCPSession) -> Dict[str, Any]:
+    async def _get_schema_from_resources(self, session) -> Dict[str, Any]:
         """Get schema from resources"""
         schema = {}
         
@@ -146,14 +151,15 @@ class SchemaService:
         except Exception as e:
             raise SchemaError(f"Failed to get schema from resources: {str(e)}")
 
-    def _infer_relationships(self, schema: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+    def _infer_relationships(self, schema: Dict[str, Any]) -> List[Dict[str, str]]:
         """Infer relationships between tables based on column names and types"""
         relationships = []
         
-        for table_name, columns in schema.items():
-            for column in columns:
+        for table_name, table_data in schema.items():
+            for column in table_data:
                 # Look for potential foreign keys
-                if column.get('Key', '').upper() == 'MUL' or '_id' in column.get('Field', '').lower():
+                if (column.get('Key', '').upper() == 'MUL' or 
+                    '_id' in column.get('Field', '').lower()):
                     # Try to find the referenced table
                     possible_table = column['Field'].replace('_id', '')
                     if possible_table in schema:

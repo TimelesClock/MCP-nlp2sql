@@ -1,27 +1,25 @@
+# query_service.py
+
+from typing import Optional, Dict, Any, Tuple, List
 import json
-import logging
-from typing import Optional, Dict, Any, Tuple
-from app.services.mcp_client import MCPClient
-from app.services.schema_service import SchemaService
-from app.services.sampling_service import SamplingService
-from app.models.query import (
-    QueryResponse, ModelPreferences, QueryResult,
-    MetabaseQuestion
-)
 from app.core.exceptions import QueryError, MCPError
-from app.utils.logging import logger, log_execution_time
 from app.core.mcp.session import MCPSession
+from app.utils.logging import logger, log_execution_time
+from app.models.query import (
+    Message, QueryResponse, ModelPreferences, QueryResult,
+    ToolType, ToolCall, MetabaseQuestion
+)
+from .mcp_client import BaseMCPClient
+from .schema_service import SchemaService
+from .sampling_service import SamplingService
+
 
 class QueryService:
-    def __init__(
-        self,
-        mcp_client: MCPClient,
-        schema_service: SchemaService,
-        sampling_service: SamplingService
-    ):
-        self.mcp_client = mcp_client
-        self.schema_service = schema_service
-        self.sampling_service = sampling_service
+    def __init__(self, config_path: str):
+        """Initialize QueryService with configuration path"""
+        self.client = BaseMCPClient(config_path)
+        self.schema_service = SchemaService(self.client)
+        self.sampling_service = SamplingService(api_provider="openai")
 
     async def _execute_query(
         self,
@@ -50,14 +48,13 @@ class QueryService:
 
             try:
                 return json.loads(result_text), False
-            except json.JSONDecodeError as e:
-                # Check if it's a MySQL error tuple
+            except json.JSONDecodeError:
                 if result_text.startswith('(') and 'Unknown column' in result_text:
                     if retry:
                         return result_text, True
                     else:
                         raise QueryError(f"MySQL Error: {result_text}")
-                raise QueryError(f"Failed to parse query result: {str(e)}")
+                raise QueryError("Failed to parse query result")
                 
         except Exception as e:
             if retry:
@@ -67,89 +64,106 @@ class QueryService:
     @log_execution_time
     async def process_query(
         self,
+        server_name: str,
         question: str,
-        model_preferences: Optional[ModelPreferences] = None
+        database_name: str,
+        model_preferences: Optional[ModelPreferences] = None,
+        message_history: Optional[List[Message]] = None,
+        type: Optional[str] = None
     ) -> QueryResponse:
         """Process a natural language query using MCP primitives"""
         
         async def process_with_session(session):
             try:
-                # Get schema
                 logger.info("Fetching schema...")
                 schema = await self.schema_service.get_schema(session)
                 
-                # Initial SQL and visualization generation
-                logger.info("Generating SQL and visualization settings...")
-                sql_query, explanation, thought_process, metabase_question = (
-                    await self.sampling_service.generate_sql_and_viz(
-                        session,
-                        question,
-                        schema,
-                        model_preferences
-                    )
+                logger.info("Processing with sampling service...")
+                response = await self.sampling_service.process_query(
+                    session=session,
+                    question=question,
+                    database_name=database_name,
+                    schema=schema,
+                    model_preferences=model_preferences,
+                    message_history=message_history,
+                    type=type
                 )
+
+                # For chart operations that include SQL, execute the SQL
+                sql = None
+                result = None
                 
-                # Execute query with potential refinement
-                logger.info(f"Executing SQL: {sql_query}")
-                result, needs_refinement = await self._execute_query(session, sql_query)
-                
-                if needs_refinement:
-                    # Get refined SQL based on error
-                    logger.info(f"Refining SQL due to error: {result}")
-                    refined_sql, explanation, thought_process = await self.sampling_service.refine_sql(
-                        session,
-                        sql_query,
-                        result,
-                        schema
+                if type != "dashboard" and response.tool_calls:
+                    chart_tool = next(
+                        (call for call in response.tool_calls 
+                            if call.type in [ToolType.CREATE_CHART, ToolType.UPDATE_CHART] 
+                            and call.params.get("sql")),
+                        None
                     )
                     
-                    logger.info(f"Executing refined SQL: {refined_sql}")
-                    result, _ = await self._execute_query(session, refined_sql, retry=False)
-                    sql_query = refined_sql
-                    
-                    # Update Metabase question with refined SQL
-                    metabase_question.dataset_query["native"]["query"] = refined_sql
+                    if chart_tool:
+                        sql = chart_tool.params["sql"]
+                        logger.info(f"Executing SQL: {sql}")
+                        result_data, needs_refinement = await self._execute_query(session, sql)
+                        
+                        if needs_refinement:
+                            logger.info(f"Refining SQL due to error: {result_data}")
+                            refined_sql, explanation, thought_process = await self.sampling_service.refine_sql(
+                                session,
+                                sql,
+                                result_data,
+                                schema
+                            )
+                            
+                            logger.info(f"Executing refined SQL: {refined_sql}")
+                            result_data, _ = await self._execute_query(session, refined_sql, retry=False)
+                            sql = refined_sql
+                            chart_tool.params["sql"] = refined_sql
+                            
+                        result = QueryResult(**result_data)
 
                 return QueryResponse(
-                    sql=sql_query,
-                    result=QueryResult(**result),
-                    explanation=explanation,
-                    thought_process=thought_process,
-                    metabase_question=metabase_question
+                    sql=sql,
+                    result=result,
+                    explanation=response.explanation,
+                    thought_process=response.thought_process,
+                    tool_calls=response.tool_calls,
+                    raw_llm_response=response.raw_llm_response
                 )
+
             except Exception as e:
-                logger.error(f"Error processing query: {str(e)}", exc_info=True)
+                logger.error(f"Error processing query: {str(e)}")
                 if isinstance(e, QueryError):
                     raise
                 raise QueryError(str(e))
 
         try:
-            return await self.mcp_client.with_session(process_with_session)
+            return await self.client.with_session(server_name, process_with_session)
         except Exception as e:
-            logger.error(f"Error in process_query: {str(e)}", exc_info=True)
+            logger.error(f"Error in process_query: {str(e)}")
             if isinstance(e, (MCPError, QueryError)):
                 raise
             raise QueryError(f"Failed to process query: {str(e)}")
 
     @log_execution_time
-    async def get_capabilities(self) -> Dict[str, Any]:
-        """Get available MCP capabilities"""
+    async def get_capabilities(self, server_name: str) -> Dict[str, Any]:
+        """Get available MCP capabilities for a specific server"""
         
         async def get_caps(session):
             try:
                 prompts = await session.list_prompts()
                 schema = await self.schema_service.get_schema(session)
                 
-                # Also get Metabase visualization capabilities
                 visualization_types = {
-                    "time_series": ["line", "area", "bar"],
-                    "comparisons": ["bar", "pie", "funnel"],
-                    "distributions": ["histogram", "scatter"],
-                    "relationships": ["scatter", "bubble"],
-                    "composition": ["pie", "stacked_bar", "stacked_area"],
-                    "geographical": ["map"]
+                    "time_series": ["line", "bar", "combo", "area", "waterfall", "trend"],
+                    "comparisons": ["bar", "row", "pie", "funnel"],
+                    "distributions": ["scatter"],
+                    "single_value": ["progress", "gauge", "number"],
+                    "tabular": ["table", "pivot table"],
+                    "geographical": ["map"],
+                    "composition": ["pie", "waterfall", "stacked_bar", "stacked_area"]
                 }
-                logging.info(prompts)
+                logger.info(prompts)
                 
                 return {
                     "prompts": [prompt for prompt in prompts],
@@ -160,15 +174,39 @@ class QueryService:
                         "supports_custom_fields": True,
                         "supports_drill_through": True,
                         "supports_filters": True,
-                        "supports_parameters": True
+                        "supports_parameters": True,
+                        "supports_dashboard": True
                     }
                 }
             except Exception as e:
-                logger.error(f"Error in get_caps: {str(e)}", exc_info=True)
+                logger.error(f"Error in get_caps: {str(e)}")
                 raise
             
         try:
-            return await self.mcp_client.with_session(get_caps)
+            return await self.client.with_session(server_name, get_caps)
         except Exception as e:
-            logger.error(f"Error in get_capabilities: {str(e)}", exc_info=True)
+            logger.error(f"Error in get_capabilities: {str(e)}")
             raise MCPError(f"Failed to get capabilities: {str(e)}")
+
+    def list_servers(self) -> Dict[str, Any]:
+        """List all available MCP servers with their configurations"""
+        try:
+            servers = self.client.server_manager.list_servers()
+            server_info = {}
+            
+            for server_name in servers:
+                config = self.client.server_manager.get_server_config(server_name)
+                server_info[server_name] = {
+                    "command": config.command,
+                    "args": config.args,
+                    "env_vars": list(config.env.keys()) if config.env else []
+                }
+            
+            return {
+                "servers": servers,
+                "server_details": server_info,
+                "default_server": "mysql"
+            }
+        except Exception as e:
+            logger.error(f"Error listing servers: {str(e)}")
+            raise MCPError(f"Failed to list servers: {str(e)}")
