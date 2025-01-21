@@ -39,7 +39,7 @@ class QueryService:
             
             result_text = next(
                 (content.text for content in result.content 
-                 if hasattr(content, 'text')),
+                if hasattr(content, 'text')),
                 None
             )
             
@@ -88,43 +88,8 @@ class QueryService:
                     message_history=message_history,
                     type=type
                 )
-
-                # For chart operations that include SQL, execute the SQL
-                sql = None
-                result = None
-                
-                if type != "dashboard" and response.tool_calls:
-                    chart_tool = next(
-                        (call for call in response.tool_calls 
-                            if call.type in [ToolType.CREATE_CHART, ToolType.UPDATE_CHART] 
-                            and call.params.get("sql")),
-                        None
-                    )
-                    
-                    if chart_tool:
-                        sql = chart_tool.params["sql"]
-                        logger.info(f"Executing SQL: {sql}")
-                        result_data, needs_refinement = await self._execute_query(session, sql)
-                        
-                        if needs_refinement:
-                            logger.info(f"Refining SQL due to error: {result_data}")
-                            refined_sql, explanation, thought_process = await self.sampling_service.refine_sql(
-                                session,
-                                sql,
-                                result_data,
-                                schema
-                            )
-                            
-                            logger.info(f"Executing refined SQL: {refined_sql}")
-                            result_data, _ = await self._execute_query(session, refined_sql, retry=False)
-                            sql = refined_sql
-                            chart_tool.params["sql"] = refined_sql
-                            
-                        result = QueryResult(**result_data)
-
+            
                 return QueryResponse(
-                    sql=sql,
-                    result=result,
                     explanation=response.explanation,
                     thought_process=response.thought_process,
                     tool_calls=response.tool_calls,

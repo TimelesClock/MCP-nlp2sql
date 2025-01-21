@@ -290,8 +290,6 @@ class NLQuery(BaseModel):
     
 class QueryResponse(BaseModel):
     """Final response model"""
-    sql: Optional[str] = None
-    result: Optional[QueryResult] = None
     explanation: str
     thought_process: Optional[List[Dict[str, str]]] = None
     tool_calls: List[ToolCall]
